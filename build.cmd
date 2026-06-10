@@ -1,0 +1,9 @@
+@echo off
+echo 正在安装资源工具...
+go install github.com/akavel/rsrc@latest
+echo 正在处理界面资源...
+rsrc -manifest match_lrc.exe.manifest -ico match_lrc.ico -o rsrc.syso
+echo 正在编译单文件版 (GUI)...
+go build -ldflags="-H windowsgui" -o match_lrc.exe .
+echo 编译完成！生成的 match_lrc.exe 现在可以独立移动到任何地方运行。
+pause

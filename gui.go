@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"fmt"
@@ -15,7 +15,6 @@ type MyMainWindow struct {
 	folderEdit *walk.LineEdit
 	recursive  *walk.CheckBox
 	overwrite  *walk.CheckBox
-	copyMode   *walk.CheckBox
 	threshold  *walk.LineEdit
 }
 
@@ -72,6 +71,53 @@ func (mw *MyMainWindow) runDownload() {
 	}()
 }
 
+func (mw *MyMainWindow) runCoverDownload() {
+	folder := mw.folderEdit.Text()
+	if folder == "" {
+		walk.MsgBox(mw, "错误", "请先选择文件夹", walk.MsgBoxIconError)
+		return
+	}
+	absFolder, _ := filepath.Abs(folder)
+	recursive := mw.recursive.Checked()
+	overwrite := mw.overwrite.Checked()
+
+	mw.logView.SetText("")
+	mw.Log("开始搜索专辑图片...")
+
+	go func() {
+		downloads, err := BuildCoverDownloads(absFolder, recursive, overwrite, mw.Log)
+		if err != nil {
+			mw.Log("错误: " + err.Error())
+			return
+		}
+		if len(downloads) == 0 {
+			mw.Log("没有找到音乐文件。")
+			return
+		}
+
+		count := 0
+		for _, item := range downloads {
+			if item.Status == "待下载" {
+				count++
+			}
+			mw.Log(fmt.Sprintf("[%s] %s", item.Status, filepath.Base(item.Music)))
+		}
+
+		if count > 0 {
+			if walk.MsgBox(mw, "确认", fmt.Sprintf("发现 %d 个可下载封面，是否执行下载？", count), walk.MsgBoxYesNo) == walk.DlgCmdYes {
+				err := ApplyCoverDownloads(downloads, overwrite, mw.Log)
+				if err != nil {
+					mw.Log("下载失败: " + err.Error())
+				} else {
+					mw.Log("专辑图片下载完成！")
+				}
+			}
+		} else {
+			mw.Log("没有可下载的封面。")
+		}
+	}()
+}
+
 func (mw *MyMainWindow) runLocalMatch() {
 	folder := mw.folderEdit.Text()
 	if folder == "" {
@@ -81,7 +127,6 @@ func (mw *MyMainWindow) runLocalMatch() {
 	absFolder, _ := filepath.Abs(folder)
 	recursive := mw.recursive.Checked()
 	overwrite := mw.overwrite.Checked()
-	copyMode := mw.copyMode.Checked()
 	threshold := 0.72
 	fmt.Sscanf(mw.threshold.Text(), "%f", &threshold)
 
@@ -109,7 +154,7 @@ func (mw *MyMainWindow) runLocalMatch() {
 
 		if count > 0 {
 			if walk.MsgBox(mw, "确认", fmt.Sprintf("发现 %d 个可匹配歌词，是否执行操作？", count), walk.MsgBoxYesNo) == walk.DlgCmdYes {
-				err := ApplyLocalMatches(matches, copyMode, overwrite, mw.Log)
+				err := ApplyLocalMatches(matches, overwrite, mw.Log)
 				if err != nil {
 					mw.Log("处理失败: " + err.Error())
 				} else {
@@ -154,8 +199,7 @@ func StartGUI() {
 				Layout: HBox{},
 				Children: []Widget{
 					CheckBox{AssignTo: &mw.recursive, Text: "递归子文件夹"},
-					CheckBox{AssignTo: &mw.overwrite, Text: "覆盖已有歌词"},
-					CheckBox{AssignTo: &mw.copyMode, Text: "复制模式(本地)"},
+					CheckBox{AssignTo: &mw.overwrite, Text: "覆盖已有文件"},
 					Label{Text: "匹配阈值"},
 					LineEdit{AssignTo: &mw.threshold, Text: "0.72", MaxLength: 4},
 				},
@@ -163,12 +207,13 @@ func StartGUI() {
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{
-					PushButton{Text: "联网搜索并下载", OnClicked: mw.runDownload},
-					PushButton{Text: "本地重命名匹配", OnClicked: mw.runLocalMatch},
+					PushButton{Text: "联网搜索并下载歌词", OnClicked: mw.runDownload},
+					PushButton{Text: "下载专辑图片", OnClicked: mw.runCoverDownload},
+					PushButton{Text: "本地重命名匹配歌词", OnClicked: mw.runLocalMatch},
 				},
 			},
 			Label{Text: "运行日志:"},
-			TextEdit{AssignTo: &mw.logView, ReadOnly: true, VScroll: true},
+			TextEdit{AssignTo: &mw.logView, ReadOnly: true, VScroll: true, MinSize: Size{0, 200}},
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{

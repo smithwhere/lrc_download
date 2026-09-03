@@ -22,59 +22,34 @@ var musicExts = map[string]bool{
 	".ogg": true, ".opus": true, ".wma": true, ".ape": true,
 }
 
-const apiBase = "https://api.ygking.top"
+const apiBase = "https://music-api.gdstudio.xyz/api.php"
 
-type QQSinger struct {
-	Name string `json:"name"`
-	Mid  string `json:"mid"`
+type Song struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Artist  []string `json:"artist"`
+	Album   string   `json:"album"`
+	PicID   string   `json:"pic_id"`
+	LyricID string   `json:"lyric_id"`
+	Source  string   `json:"source"`
 }
 
-type QQAlbum struct {
-	Mid  string `json:"mid"`
-	Name string `json:"name"`
-	Pmid string `json:"pmid"`
+type LyricResult struct {
+	Lyric  string `json:"lyric"`
+	TLyric string `json:"tlyric"`
 }
 
-type QQSong struct {
-	Mid    string     `json:"mid"`
-	Name   string     `json:"name"`
-	Title  string     `json:"title"`
-	Singer []QQSinger `json:"singer"`
-	Album  QQAlbum    `json:"album"`
-}
-
-type QQSearchResult struct {
-	Code int `json:"code"`
-	Data struct {
-		List []QQSong `json:"list"`
-	} `json:"data"`
-}
-
-type QQLyricResult struct {
-	Code int `json:"code"`
-	Data struct {
-		Lyric string `json:"lyric"`
-		Trans string `json:"trans"`
-		Roma  string `json:"roma"`
-	} `json:"data"`
-}
-
-type QQCoverResult struct {
-	Code int `json:"code"`
-	Data struct {
-		URL    string `json:"url"`
-		Source string `json:"source"`
-		Size   int    `json:"size"`
-	} `json:"data"`
+type PicResult struct {
+	URL string `json:"url"`
 }
 
 type Download struct {
-	Music   string
-	Target  string
-	Source  string
-	Lyrics  string
-	SongMid string
-	Status  string
+	Music  string
+	Target string
+	Source string
+	Lyrics string
+	SongID string
+	Status string
 }
 
 type CoverDownload struct {
@@ -155,6 +130,19 @@ func listFiles(folder string, recursive bool) ([]string, error) {
 }
 
 func httpGetText(rawURL string) (string, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		text, err := httpGetTextOnce(rawURL)
+		if err == nil {
+			return text, nil
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+		}
+	}
+	return "", fmt.Errorf("request failed after retries")
+}
+
+func httpGetTextOnce(rawURL string) (string, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
@@ -219,35 +207,45 @@ func sameArtist(found string, expected string) bool {
 	return normalizeName(found) == normalizeName(expected)
 }
 
-func searchQQMusic(title, artist string) (*QQSong, error) {
-	query := url.Values{
-		"keyword": {title},
-		"type":    {"song"},
-		"num":     {"20"},
+var stableSources = []string{"netease", "kuwo", "joox"}
+
+func searchMusic(title, artist string) (*Song, error) {
+	for _, source := range stableSources {
+		song, err := searchMusicBySource(title, artist, source)
+		if err == nil && song != nil {
+			return song, nil
+		}
 	}
-	searchURL := apiBase + "/api/search?" + query.Encode()
+	return nil, nil
+}
+
+func searchMusicBySource(title, artist, source string) (*Song, error) {
+	query := url.Values{
+		"types":  {"search"},
+		"source": {source},
+		"name":   {title},
+		"count":  {"20"},
+		"pages":  {"1"},
+	}
+	searchURL := apiBase + "?" + query.Encode()
 	text, err := httpGetText(searchURL)
 	if err != nil {
 		return nil, err
 	}
-
-	var result QQSearchResult
-	if err := json.Unmarshal([]byte(text), &result); err != nil {
+	text = strings.TrimPrefix(text, "\ufeff")
+	var songs []Song
+	if err := json.Unmarshal([]byte(text), &songs); err != nil {
 		return nil, err
 	}
-	if result.Code != 0 {
-		return nil, fmt.Errorf("API error: code %d", result.Code)
-	}
-
-	for i := range result.Data.List {
-		song := &result.Data.List[i]
+	for i := range songs {
+		song := &songs[i]
 		if normalizeName(song.Name) != normalizeName(title) {
 			continue
 		}
 		if artist != "" {
 			matched := false
-			for _, s := range song.Singer {
-				if sameArtist(s.Name, artist) {
+			for _, a := range song.Artist {
+				if sameArtist(a, artist) {
 					matched = true
 					break
 				}
@@ -261,21 +259,21 @@ func searchQQMusic(title, artist string) (*QQSong, error) {
 	return nil, nil
 }
 
-func searchQQMusicBoth(title, artist string) (*QQSong, error) {
-	song, err := searchQQMusic(title, artist)
+func searchMusicBoth(title, artist string) (*Song, error) {
+	song, err := searchMusic(title, artist)
 	if err == nil && song != nil {
 		return song, nil
 	}
 	if artist != "" {
-		song, err = searchQQMusic(artist, title)
+		song, err = searchMusic(artist, title)
 		if err == nil && song != nil {
 			return song, nil
 		}
-		song, err = searchQQMusic(title, "")
+		song, err = searchMusic(title, "")
 		if err == nil && song != nil {
 			return song, nil
 		}
-		song, err = searchQQMusic(artist, "")
+		song, err = searchMusic(artist, "")
 		if err == nil && song != nil {
 			return song, nil
 		}
@@ -283,45 +281,41 @@ func searchQQMusicBoth(title, artist string) (*QQSong, error) {
 	return nil, nil
 }
 
-func getLyricsQQ(mid string) (string, error) {
+func getLyrics(lyricID, source string) (string, error) {
 	query := url.Values{
-		"mid": {mid},
+		"types":  {"lyric"},
+		"source": {source},
+		"id":     {lyricID},
 	}
-	lyricURL := apiBase + "/api/lyric?" + query.Encode()
+	lyricURL := apiBase + "?" + query.Encode()
 	text, err := httpGetText(lyricURL)
 	if err != nil {
 		return "", err
 	}
-
-	var result QQLyricResult
+	var result LyricResult
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
 		return "", err
 	}
-	if result.Code != 0 {
-		return "", fmt.Errorf("API error: code %d", result.Code)
-	}
-	return result.Data.Lyric, nil
+	return result.Lyric, nil
 }
 
-func getCoverURLQQ(mid string) (string, error) {
+func getCoverURL(picID, source string) (string, error) {
 	query := url.Values{
-		"mid":  {mid},
-		"size": {"500"},
+		"types":  {"pic"},
+		"source": {source},
+		"id":     {picID},
+		"size":   {"500"},
 	}
-	coverURL := apiBase + "/api/song/cover?" + query.Encode()
+	coverURL := apiBase + "?" + query.Encode()
 	text, err := httpGetText(coverURL)
 	if err != nil {
 		return "", err
 	}
-
-	var result QQCoverResult
+	var result PicResult
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
 		return "", err
 	}
-	if result.Code != 0 {
-		return "", fmt.Errorf("API error: code %d", result.Code)
-	}
-	return result.Data.URL, nil
+	return result.URL, nil
 }
 
 func searchLrcCx(title, artist string) (string, error) {
@@ -388,19 +382,19 @@ func searchLyricsForFile(music string, overwrite bool, logFn func(string)) Downl
 	}
 	var lyrics string
 	var source string
-	var songMid string
+	var songID string
 	var found bool
-	song, err := searchQQMusicBoth(title, artist)
+	song, err := searchMusicBoth(title, artist)
 	if err == nil && song != nil {
-		lrcText, err := getLyricsQQ(song.Mid)
+		lrcText, err := getLyrics(song.LyricID, song.Source)
 		if err == nil && hasLRCTimestamps(lrcText) {
 			lyrics = lrcText
-			singerName := ""
-			if len(song.Singer) > 0 {
-				singerName = song.Singer[0].Name
+			artistName := ""
+			if len(song.Artist) > 0 {
+				artistName = song.Artist[0]
 			}
-			source = fmt.Sprintf("QQ音乐 - %s - %s", singerName, song.Name)
-			songMid = song.Mid
+			source = fmt.Sprintf("%s - %s - %s", song.Source, artistName, song.Name)
+			songID = song.LyricID
 			found = true
 		}
 	}
@@ -423,7 +417,7 @@ func searchLyricsForFile(music string, overwrite bool, logFn func(string)) Downl
 	if !found {
 		return Download{Music: music, Target: target, Status: "未找到"}
 	}
-	return Download{Music: music, Target: target, Source: source, Lyrics: lyrics, SongMid: songMid, Status: "待下载"}
+	return Download{Music: music, Target: target, Source: source, Lyrics: lyrics, SongID: songID, Status: "待下载"}
 }
 
 func ApplyDownloads(downloads []Download, overwrite bool, logFn func(string)) error {
@@ -500,19 +494,19 @@ func searchCoverForFile(music string, overwrite bool, logFn func(string)) CoverD
 	if logFn != nil {
 		logFn(fmt.Sprintf("搜索封面：%s - %s", artist, title))
 	}
-	song, err := searchQQMusicBoth(title, artist)
+	song, err := searchMusicBoth(title, artist)
 	if err != nil || song == nil {
 		return CoverDownload{Music: music, Target: target, Status: "未找到"}
 	}
-	coverURL, err := getCoverURLQQ(song.Mid)
+	coverURL, err := getCoverURL(song.PicID, song.Source)
 	if err != nil || coverURL == "" {
 		return CoverDownload{Music: music, Target: target, Status: "未找到"}
 	}
-	singerName := ""
-	if len(song.Singer) > 0 {
-		singerName = song.Singer[0].Name
+	artistName := ""
+	if len(song.Artist) > 0 {
+		artistName = song.Artist[0]
 	}
-	source := fmt.Sprintf("QQ音乐 - %s - %s", singerName, song.Name)
+	source := fmt.Sprintf("%s - %s - %s", song.Source, artistName, song.Name)
 	return CoverDownload{Music: music, Target: target, Source: source, CoverURL: coverURL, Status: "待下载"}
 }
 

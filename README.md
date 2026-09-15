@@ -46,14 +46,14 @@
 
 ## 编译方法
 
-如果你有 Go 环境，可以双击：
-```text
-build.cmd
-```
-或者在当前目录运行：
+本项目支持完全无依赖编译，资源文件（`rsrc.syso`）已预置在项目根目录，无需安装任何额外工具。
+
+在当前目录运行：
 ```powershell
 go build -ldflags="-H windowsgui" -o match_lrc.exe .
 ```
+
+编译前提仅需安装 Go 1.25+ 工具链，`go build` 会自动处理所有 Go 模块依赖并内嵌资源文件，生成的 `match_lrc.exe` 为独立可执行文件。
 
 ## 命令行用法 (仍然支持)
 

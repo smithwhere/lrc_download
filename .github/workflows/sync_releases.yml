@@ -77,8 +77,7 @@ jobs:
               repo: myRepo,
               per_page: 100
             });
-            // A failed publication can leave a draft with the same tag as a published release.
-            // Never let that draft shadow the published release, regardless of list order.
+            // 同一标签同时存在草稿和正式版本时，优先使用正式版本。
             const myReleaseByTag = new Map();
             for (const item of myReleases) {
               const existing = myReleaseByTag.get(item.tag_name);
@@ -90,12 +89,14 @@ jobs:
 
             // Oldest first, so release order remains chronological.
             for (const release of upstreamReleases.data.reverse()) {
-              // Resolve published releases directly by tag before considering resumable drafts.
-              // Only 404 means absent; authentication and service errors must stop the sync.
+              // 按标签直接查找正式版本，避免重复创建、发布同名草稿。
+              // 只有 404 才回退到列表；权限、限流和服务错误直接抛出。
               let targetRelease;
               try {
                 const published = await github.rest.repos.getReleaseByTag({
-                  owner: myOwner, repo: myRepo, tag: release.tag_name
+                  owner: myOwner,
+                  repo: myRepo,
+                  tag: release.tag_name
                 });
                 targetRelease = published.data;
               } catch (error) {

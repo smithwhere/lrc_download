@@ -77,12 +77,31 @@ jobs:
               repo: myRepo,
               per_page: 100
             });
-            const myReleaseByTag = new Map(myReleases.map(item => [item.tag_name, item]));
+            // A failed publication can leave a draft with the same tag as a published release.
+            // Never let that draft shadow the published release, regardless of list order.
+            const myReleaseByTag = new Map();
+            for (const item of myReleases) {
+              const existing = myReleaseByTag.get(item.tag_name);
+              if (!existing || (existing.draft && !item.draft)) {
+                myReleaseByTag.set(item.tag_name, item);
+              }
+            }
             const syncedTags = [];
 
             // Oldest first, so release order remains chronological.
             for (const release of upstreamReleases.data.reverse()) {
-              let targetRelease = myReleaseByTag.get(release.tag_name);
+              // Resolve published releases directly by tag before considering resumable drafts.
+              // Only 404 means absent; authentication and service errors must stop the sync.
+              let targetRelease;
+              try {
+                const published = await github.rest.repos.getReleaseByTag({
+                  owner: myOwner, repo: myRepo, tag: release.tag_name
+                });
+                targetRelease = published.data;
+              } catch (error) {
+                if ((error.status || error.response?.status) !== 404) throw error;
+                targetRelease = myReleaseByTag.get(release.tag_name);
+              }
               let createdNow = false;
 
               if (!targetRelease) {
